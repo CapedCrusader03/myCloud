@@ -45,6 +45,15 @@ async def process_incoming_chunk(
     if not upload:
         return False
         
+    # Idempotency: If the client accidentally sends Chunk 4 twice, ignore the second one!
+    stmt_check = select(Chunk).where(
+        Chunk.upload_id == upload.id,
+        Chunk.chunk_index == chunk_index,
+        Chunk.is_uploaded == True
+    )
+    if await db.scalar(stmt_check):
+        return True # Chunk already saved, exit early without touching the disk!
+        
     size = len(raw_data)
     checksum = hashlib.sha256(raw_data).hexdigest()
     

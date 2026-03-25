@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from services import upload_service
@@ -56,3 +56,19 @@ async def cancel_upload(upload_id: str, db: AsyncSession = Depends(get_db)):
     if res:
         return {"message": f"Upload {upload_id} has been cancelled and chunks deleted."}
     return {"message": "Upload not found"}, 404
+
+@router.head("/{upload_id}", status_code=200)
+async def resume_upload_status(upload_id: str, response: Response, db: AsyncSession = Depends(get_db)):
+    # Re-use our GET status logic to find what's missing
+    res = await upload_service.get_upload_status(db, upload_id)
+    if not res:
+        response.status_code = 404
+        return
+        
+    received_set = set(res["received_chunks"])
+    missing_chunks = [str(i) for i in range(1, res["total_chunks"] + 1) if i not in received_set]
+    
+    # Send instructions back to the client via HTTP headers
+    response.headers["Upload-Offset"] = str(len(received_set))
+    response.headers["X-Missing-Chunks"] = ",".join(missing_chunks)
+    return
