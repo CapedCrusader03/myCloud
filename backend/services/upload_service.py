@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -7,6 +8,8 @@ from sqlalchemy import func
 from models.domain import Upload, Chunk
 import hashlib
 from services import storage_service
+
+logger = logging.getLogger(__name__)
 
 async def initiate_upload(
     db: AsyncSession, 
@@ -41,8 +44,18 @@ async def process_incoming_chunk(
     chunk_index: int,
     raw_data: bytes
 ):
-    upload = await db.get(Upload, uuid.UUID(upload_id))
+    # 1. Fetch upload with a ROW LOCK (SELECT FOR UPDATE)
+    # This ensures that if 10 chunks arrive at once, they wait their turn
+    # to update the database and check the total count.
+    stmt_upload = select(Upload).where(Upload.id == uuid.UUID(upload_id)).with_for_update()
+    result = await db.execute(stmt_upload)
+    upload = result.scalar_one_or_none()
+    
     if not upload:
+        return False
+        
+    # Guard: If the upload is already finished or cancelled, don't accept more chunks
+    if upload.status in ["complete", "cancelled"]:
         return False
         
     # Idempotency: If the client accidentally sends Chunk 4 twice, ignore the second one!
@@ -75,7 +88,7 @@ async def process_incoming_chunk(
     stmt = select(func.count()).where(Chunk.upload_id == upload.id, Chunk.is_uploaded == True)
     uploaded_count = await db.scalar(stmt)
     
-    if uploaded_count == upload.total_chunks:
+    if uploaded_count == upload.total_chunks and upload.status == "uploading":
         upload.status = "assembling"
         await db.commit()
         
@@ -93,7 +106,7 @@ async def process_incoming_chunk(
             upload.status = "corrupted"
             
         await db.commit()
-    
+        
     return True
 
 async def get_upload_status(db: AsyncSession, upload_id: str):

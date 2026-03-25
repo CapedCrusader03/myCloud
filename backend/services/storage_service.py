@@ -20,9 +20,6 @@ async def write_chunk(upload_id: str, chunk_index: int, data: bytes):
     async with aiofiles.open(chunk_path, 'wb') as f:
         await f.write(data)
 
-import asyncio
-import shutil
-
 async def delete_chunks(upload_id: str):
     """Deletes the chunks directory for a given upload_id"""
     upload_dir = os.path.join(CHUNK_DIR, upload_id)
