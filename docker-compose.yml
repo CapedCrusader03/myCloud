@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  api:
+    build:
+      context: ./backend
+      # Assuming a standard Dockerfile in ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - chunk_data:/app/chunks
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/mycloud
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: mycloud
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mycloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for pub/sub (SSE) and rate limiting
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # React Frontend (Vite + TypeScript)
+  frontend:
+    build:
+      context: ./frontend
+      # Assuming a standard Dockerfile in ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: npm run dev -- --host
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  chunk_data:

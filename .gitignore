@@ -1,6 +1,35 @@
-*.md
-!README.md
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
 .env
 .venv
-__pycache__
-.vscode
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Upload Chunks directory
+backend/chunks/
+
+# Node (in case frontend is not fully covered by its own .gitignore)
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
+
+# Ignore all markdown files except README
+*.md
+!README.md
