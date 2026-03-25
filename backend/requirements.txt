@@ -6,3 +6,5 @@ aiofiles
 python-jose
 uvicorn
 alembic
+pytest
+pytest-asyncio
