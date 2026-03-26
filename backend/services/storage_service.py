@@ -12,7 +12,7 @@ async def write_chunk(upload_id: str, chunk_index: int, data: bytes):
     """Writes raw bytes to chunks/{upload_id}/{chunk_index}.part"""
     
     # Create a subfolder specifically for this upload_id
-    upload_dir = os.path.join(CHUNK_DIR, upload_id)
+    upload_dir = os.path.join(CHUNK_DIR, str(upload_id))
     os.makedirs(upload_dir, exist_ok=True)
     
     # Write the chunk file
@@ -22,15 +22,15 @@ async def write_chunk(upload_id: str, chunk_index: int, data: bytes):
 
 async def delete_chunks(upload_id: str):
     """Deletes the chunks directory for a given upload_id"""
-    upload_dir = os.path.join(CHUNK_DIR, upload_id)
+    upload_dir = os.path.join(CHUNK_DIR, str(upload_id))
     if os.path.exists(upload_dir):
         # Run blocking rmtree in a background thread to prevent freezing the event loop
         await asyncio.to_thread(shutil.rmtree, upload_dir)
 
 async def assemble_file(upload_id: str, total_chunks: int, final_filename: str):
 
-    upload_dir = os.path.join(CHUNK_DIR, upload_id)
-    final_path = os.path.join(CHUNK_DIR, f"{upload_id}_{final_filename}")
+    upload_dir = os.path.join(CHUNK_DIR, str(upload_id))
+    final_path = os.path.join(CHUNK_DIR, f"{str(upload_id)}_{final_filename}")
 
     def _stitch():
         sha256_hash = hashlib.sha256()

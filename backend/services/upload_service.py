@@ -129,12 +129,22 @@ async def process_incoming_chunk(
             "percent": 100.0
         })
         
-        success = await storage_service.assemble_file(upload.id, upload.filename, upload.file_checksum)
-        
-        if success:
-            upload.status = "complete"
-            event_type = "UPLOAD_COMPLETE"
-        else:
+        try:
+            # 3. Trigger assembly and check for corruption
+            actual_checksum = await storage_service.assemble_file(
+                upload_id=str(upload.id),
+                total_chunks=upload.total_chunks,
+                final_filename=upload.filename
+            )
+            
+            if actual_checksum == upload.file_checksum:
+                upload.status = "complete"
+                event_type = "UPLOAD_COMPLETE"
+            else:
+                upload.status = "error"
+                event_type = "UPLOAD_ERROR"
+        except Exception as e:
+            logger.error(f"Assembly failed for {upload.id}: {e}")
             upload.status = "error"
             event_type = "UPLOAD_ERROR"
             

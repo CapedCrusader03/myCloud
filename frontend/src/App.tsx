@@ -77,9 +77,10 @@ export default function App() {
   };
 
   const calculateChecksum = async (file: File) => {
-    // For a real production app, we'd use a library like SparkMD5 or crypto.subtle
-    // For this demo, let's use a dummy checksum or just its name+size hash
-    return `sha256-${file.name}-${file.size}`;
+    const arrayBuffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
   const startUpload = async () => {
