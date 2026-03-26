@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Upload as UploadIcon, File as FileIcon, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { 
+  Upload as UploadIcon, 
+  File as FileIcon, 
+  CheckCircle, 
+  AlertCircle, 
+  Loader2, 
+  Download, 
+  Share2, 
+  Copy,
+  ExternalLink
+} from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
@@ -18,6 +28,7 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
 
   // SSE Listener: Connect to the backend for real-time updates
   useEffect(() => {
@@ -148,6 +159,40 @@ export default function App() {
     }
   };
 
+  const handleDownload = async () => {
+    if (!upload?.id) return;
+    try {
+      const { data } = await axios.get(`${API_BASE}/uploads/${upload.id}/token`);
+      // Start the download in a new tab/window
+      window.open(`${API_BASE}/uploads/download/${data.token}`, '_blank');
+    } catch (err) {
+      console.error("Download failed", err);
+      alert("Failed to get download token.");
+    }
+  };
+
+  const handleShare = async () => {
+    if (!upload?.id) return;
+    try {
+      const { data } = await axios.post(`${API_BASE}/uploads/${upload.id}/share`, {
+        ttl_hours: 24, // 1 day default
+        max_downloads: 5 // 5 downloads default
+      });
+      const fullUrl = `${window.location.origin}${data.share_url}`;
+      setShareUrl(fullUrl);
+    } catch (err) {
+      console.error("Sharing failed", err);
+      alert("Failed to create share link.");
+    }
+  };
+
+  const copyToClipboard = () => {
+    if (shareUrl) {
+      navigator.clipboard.writeText(shareUrl);
+      alert("Link copied to clipboard!");
+    }
+  };
+
   return (
     <div className="glass-card">
       <h1>myCloud</h1>
@@ -201,8 +246,35 @@ export default function App() {
             {upload.status === 'error' && <AlertCircle size={18} color="var(--error)" />}
           </div>
           
+          
           {upload.status === 'complete' && (
-            <button className="btn" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => {setUpload(null); setFile(null);}}>
+            <div className="actions-grid" style={{ marginTop: '1.5rem' }}>
+              <button className="btn btn-secondary" onClick={handleDownload}>
+                <Download size={18} /> Download
+              </button>
+              <button className="btn btn-secondary" onClick={handleShare}>
+                <Share2 size={18} /> Share Link
+              </button>
+            </div>
+          )}
+
+          {shareUrl && (
+            <div className="share-box">
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>Public Share Link (Expires in 24h)</p>
+              <div className="share-input-group">
+                <input readOnly value={shareUrl} />
+                <button onClick={copyToClipboard} title="Copy to clipboard">
+                  <Copy size={16} />
+                </button>
+                <a href={shareUrl} target="_blank" rel="noreferrer" title="Open in new tab">
+                  <ExternalLink size={16} />
+                </a>
+              </div>
+            </div>
+          )}
+          
+          {upload.status === 'complete' && (
+            <button className="btn" style={{ marginTop: '1rem', width: '100%', background: 'transparent', border: '1px solid var(--glass-border)' }} onClick={() => {setUpload(null); setFile(null); setShareUrl(null);}}>
               Upload Another File
             </button>
           )}

@@ -143,3 +143,74 @@ p.subtitle {
 .status-uploading { background: rgba(99, 102, 241, 0.2); color: var(--primary); }
 .status-complete { background: rgba(16, 185, 129, 0.2); color: var(--success); }
 .status-error { background: rgba(239, 68, 68, 0.2); color: var(--error); }
+
+.actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--primary);
+}
+
+.btn-secondary svg {
+  margin-right: 0.5rem;
+}
+
+.share-box {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.share-input-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.share-input-group input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--glass-border);
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  color: var(--text-main);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.share-input-group button, .share-input-group a {
+  background: var(--card-bg);
+  border: 1px solid var(--glass-border);
+  padding: 0.5rem;
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.share-input-group button:hover, .share-input-group a:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
