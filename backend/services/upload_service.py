@@ -5,11 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
-from models.domain import Upload, Chunk
+from models.domain import Upload, Chunk, DownloadToken, ShareLink
 import hashlib
 import json
+from jose import jwt, JWTError
 from services import storage_service
 from redis_config import redis_client
+
+# JWT Configuration
+SECRET_KEY = "mycloud-super-secret-key-123"
+ALGORITHM = "HS256"
+TOKEN_EXPIRE_MINUTES = 60
 
 logger = logging.getLogger(__name__)
 
@@ -203,3 +209,49 @@ async def cancel_upload(db: AsyncSession, upload_id: str):
     await broadcast_upload_event(upload, "UPLOAD_CANCELLED")
     
     return True
+
+async def generate_download_token(db: AsyncSession, upload_id: str):
+    try:
+        uid = uuid.UUID(upload_id)
+    except ValueError:
+        return None
+        
+    upload = await db.get(Upload, uid)
+    if not upload or upload.status != "complete":
+        return None
+        
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=TOKEN_EXPIRE_MINUTES)
+    
+    payload = {
+        "upload_id": str(upload.id),
+        "exp": expires_at
+    }
+    
+    token_str = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    
+    db_token = DownloadToken(
+        upload_id=upload.id,
+        token=token_str,
+        expires_at=expires_at
+    )
+    db.add(db_token)
+    await db.commit()
+    
+    return token_str
+
+async def validate_download_token(db: AsyncSession, token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        upload_id = payload.get("upload_id")
+    except JWTError:
+        return None
+        
+    # Check DB for existence and if it was already used (optional, sticking to multiple-use JWT for now)
+    stmt = select(DownloadToken).where(DownloadToken.token == token)
+    result = await db.execute(stmt)
+    db_token = result.scalar_one_or_none()
+    
+    if not db_token or db_token.expires_at < datetime.now(timezone.utc):
+        return None
+        
+    return db_token.upload_id

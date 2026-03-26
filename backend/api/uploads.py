@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+import os
 import asyncio
 import json
 from redis_config import redis_client
@@ -53,14 +54,17 @@ async def get_upload_status(upload_id: str, db: AsyncSession = Depends(get_db)):
     res = await upload_service.get_upload_status(db, upload_id)
     if res:
         return res
-    return {"message": "Upload not found"}, 404
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Upload not found")
+
 
 @router.delete("/{upload_id}")
 async def cancel_upload(upload_id: str, db: AsyncSession = Depends(get_db)):
     res = await upload_service.cancel_upload(db, upload_id)
     if res:
         return {"message": f"Upload {upload_id} has been cancelled and chunks deleted."}
-    return {"message": "Upload not found"}, 404
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Upload not found")
 
 @router.head("/{upload_id}", status_code=200)
 async def resume_upload_status(upload_id: str, response: Response, db: AsyncSession = Depends(get_db)):
@@ -110,3 +114,41 @@ async def stream_upload_events(upload_id: str):
             await pubsub.close()
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@router.get("/{upload_id}/token")
+async def get_download_token(upload_id: str, db: AsyncSession = Depends(get_db)):
+    token = await upload_service.generate_download_token(db, upload_id)
+    if token:
+        return {"token": token}
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Upload not found or not complete")
+
+# Note: This is an APIRouter prefixed with /uploads, but for the download link, 
+# we might want a cleaner /download/{token} path.
+# For now, I'll add it to this router to keep things simple, 
+# so it will be reachable at /uploads/download/{token}.
+@router.get("/download/{token}")
+async def download_file(token: str, db: AsyncSession = Depends(get_db)):
+    upload_id = await upload_service.validate_download_token(db, token)
+    if not upload_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Get upload info for filename
+    status = await upload_service.get_upload_status(db, str(upload_id))
+    if not status:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    filename = status["filename"]
+    file_path = f"chunks/{upload_id}_{filename}"
+    
+    if not os.path.exists(file_path):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Physical file not found on disk")
+        
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
