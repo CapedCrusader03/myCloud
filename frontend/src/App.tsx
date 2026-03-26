@@ -9,7 +9,11 @@ import {
   Download, 
   Share2, 
   Copy,
-  ExternalLink
+  ExternalLink,
+  LogIn,
+  UserPlus,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -24,11 +28,39 @@ interface UploadState {
   receivedChunks: number;
 }
 
+interface FileRecord {
+  upload_id: string;
+  filename: string;
+  total_size: number;
+  created_at: string;
+  status: string;
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [files, setFiles] = useState<FileRecord[]>([]);
+  
+  // Auth State
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [email, setEmail] = useState<string>(localStorage.getItem('userEmail') || '');
+  const [authView, setAuthView] = useState<'login' | 'register'>('login');
+  const [password, setPassword] = useState('');
+
+  // Configure Axios Defaults
+  useEffect(() => {
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      localStorage.setItem('token', token);
+      localStorage.setItem('userEmail', email);
+    } else {
+      delete axios.defaults.headers.common['Authorization'];
+      localStorage.removeItem('token');
+      localStorage.removeItem('userEmail');
+    }
+  }, [token, email]);
 
   // SSE Listener: Connect to the backend for real-time updates
   useEffect(() => {
@@ -80,6 +112,49 @@ export default function App() {
 
     return () => eventSource.close();
   }, [upload?.id, upload?.status]);
+
+  // Dashboard Fetch
+  const fetchFiles = async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/uploads`);
+      setFiles(data);
+    } catch (err) {
+      console.error("Failed to fetch files", err);
+    }
+  };
+
+  useEffect(() => {
+    if (token) {
+      fetchFiles();
+      const interval = setInterval(fetchFiles, 10000); 
+      return () => clearInterval(interval);
+    }
+  }, [token]);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (authView === 'login') {
+        const params = new URLSearchParams();
+        params.append('username', email);
+        params.append('password', password);
+        const { data } = await axios.post(`${API_BASE}/auth/login`, params);
+        setToken(data.access_token);
+      } else {
+        await axios.post(`${API_BASE}/auth/register`, { email, password });
+        alert("Account created! Please login.");
+        setAuthView('login');
+      }
+    } catch (err) {
+      alert("Authentication failed. Check credentials.");
+    }
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    setFiles([]);
+    setUpload(null);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -193,10 +268,85 @@ export default function App() {
     }
   };
 
+  const handleDownloadFile = async (id: string) => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/uploads/${id}/token`);
+      window.open(`${API_BASE}/uploads/download/${data.token}`, '_blank');
+    } catch (err) {
+      alert("Failed to download.");
+    }
+  };
+
+  const handleShareFile = async (id: string) => {
+    try {
+      const { data } = await axios.post(`${API_BASE}/uploads/${id}/share`, { ttl_hours: 24 });
+      setShareUrl(`${window.location.origin}${data.share_url}`);
+    } catch (err) {
+      alert("Failed to share.");
+    }
+  };
+
+  const handleDeleteFile = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this file permanently?")) return;
+    try {
+      await axios.delete(`${API_BASE}/uploads/${id}`);
+      fetchFiles();
+    } catch (err) {
+      alert("Failed to delete.");
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="glass-card auth-card">
+        <h1>myCloud</h1>
+        <p className="subtitle">{authView === 'login' ? 'Welcome back! Login to your drive.' : 'Create an account to start uploading.'}</p>
+        
+        <form onSubmit={handleAuth} className="auth-form">
+          <input 
+            type="email" 
+            placeholder="Email Address" 
+            value={email} 
+            onChange={(e) => setEmail(e.target.value)} 
+            required 
+          />
+          <input 
+            type="password" 
+            placeholder="Password" 
+            value={password} 
+            onChange={(e) => setPassword(e.target.value)} 
+            required 
+          />
+          <button type="submit" className="btn">
+            {authView === 'login' ? <LogIn size={18} /> : <UserPlus size={18} />}
+            {authView === 'login' ? 'Login' : 'Register'}
+          </button>
+        </form>
+
+        <p className="auth-switch" onClick={() => setAuthView(authView === 'login' ? 'register' : 'login')}>
+          {authView === 'login' ? "Don't have an account? Register" : "Already have an account? Login"}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="glass-card">
-      <h1>myCloud</h1>
-      <p className="subtitle">High-performance resumable file transfers.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1>myCloud</h1>
+          <p className="subtitle">High-performance resumable file transfers.</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div className="user-badge">
+            <UserIcon size={14} />
+            <span>{email}</span>
+          </div>
+          <button className="btn-logout" onClick={handleLogout} title="Logout">
+            <LogOut size={18} />
+          </button>
+        </div>
+      </div>
 
       {!upload ? (
         <div 
@@ -278,6 +428,36 @@ export default function App() {
               Upload Another File
             </button>
           )}
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div className="dashboard-section">
+          <h3>My Files</h3>
+          <div className="file-grid">
+            {files.map(f => (
+              <div key={f.upload_id} className="file-card">
+                <div className="file-info">
+                  <FileIcon size={20} className="file-icon" />
+                  <div className="file-details">
+                    <span className="file-name">{f.filename}</span>
+                    <span className="file-size">{(f.total_size / 1024 / 1024).toFixed(2)} MB</span>
+                  </div>
+                </div>
+                <div className="file-actions">
+                  <button onClick={() => handleDownloadFile(f.upload_id)} title="Download">
+                    <Download size={16} />
+                  </button>
+                  <button onClick={() => handleShareFile(f.upload_id)} title="Share">
+                    <Share2 size={16} />
+                  </button>
+                  <button onClick={() => handleDeleteFile(f.upload_id)} title="Delete" className="btn-delete">
+                    <AlertCircle size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

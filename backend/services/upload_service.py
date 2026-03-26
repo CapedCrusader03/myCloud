@@ -44,6 +44,7 @@ async def broadcast_upload_event(upload: Upload, event_type: str, extra: dict = 
 
 async def initiate_upload(
     db: AsyncSession, 
+    user_id: uuid.UUID,
     filename: str, 
     total_size: int, 
     chunk_size: int, 
@@ -60,6 +61,7 @@ async def initiate_upload(
         total_chunks=total_chunks,
         file_checksum=file_checksum,
         status="uploading",
+        user_id=user_id,
         created_at=datetime.now(timezone.utc),
         expires_at=datetime.now(timezone.utc) + timedelta(days=7)
     )
@@ -180,6 +182,9 @@ async def get_upload_status(db: AsyncSession, upload_id: str):
     if not upload:
         return None
         
+    return upload
+
+async def get_upload_status_dict(upload: Upload):
     received_indexes = [c.chunk_index for c in upload.chunks if c.is_uploaded]
     
     return {
@@ -313,3 +318,42 @@ async def resolve_share_link(db: AsyncSession, slug: str):
     # Generate a fresh download token for this specific access
     token = await generate_download_token(db, str(share.upload_id))
     return token, "OK"
+
+async def list_uploads(db: AsyncSession, user_id: uuid.UUID):
+    stmt = select(Upload).where(Upload.status == "complete", Upload.user_id == user_id).order_by(Upload.created_at.desc())
+    result = await db.execute(stmt)
+    uploads = result.scalars().all()
+    
+    return [
+        {
+            "upload_id": str(u.id),
+            "filename": u.filename,
+            "total_size": u.total_size,
+            "created_at": u.created_at.isoformat(),
+            "status": u.status
+        }
+        for u in uploads
+    ]
+
+async def delete_upload(db: AsyncSession, upload_id: str, user_id: uuid.UUID = None):
+    try:
+        uid = uuid.UUID(upload_id)
+    except ValueError:
+        return False
+        
+    upload = await db.get(Upload, uid)
+    if not upload:
+        return False
+        
+    # Ownership Check
+    if user_id and upload.user_id != user_id:
+        return False
+        
+    # Delete the physical file
+    await storage_service.delete_final_file(str(upload.id), upload.filename)
+    
+    # Delete from DB (Cascade will handle tokens and share links)
+    await db.delete(upload)
+    await db.commit()
+    
+    return True

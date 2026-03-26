@@ -8,6 +8,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    uploads: Mapped[List["Upload"]] = relationship("Upload", back_populates="user")
+
+
 class Upload(Base):
     __tablename__ = "uploads"
 
@@ -19,9 +30,11 @@ class Upload(Base):
     file_checksum: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(100), default="uploading")
     api_key: Mapped[Optional[str]] = mapped_column(String(100))
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="uploads")
     chunks: Mapped[List["Chunk"]] = relationship("Chunk", back_populates="upload", cascade="all, delete-orphan")
 
 

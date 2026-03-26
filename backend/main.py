@@ -28,6 +28,9 @@ app.add_middleware(
     expose_headers=["Upload-Offset", "X-Missing-Chunks"]
 )
 
+from api import uploads, auth
+
+app.include_router(auth.router)
 app.include_router(uploads.router)
 
 @app.get("/health")

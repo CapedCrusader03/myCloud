@@ -49,4 +49,10 @@ async def assemble_file(upload_id: str, total_chunks: int, final_filename: str):
     await delete_chunks(upload_id)
 
     return final_checksum
+
+async def delete_final_file(upload_id: str, filename: str):
+    """Deletes the assembled file from the chunks directory"""
+    file_path = os.path.join(CHUNK_DIR, f"{str(upload_id)}_{filename}")
+    if os.path.exists(file_path):
+        await asyncio.to_thread(os.remove, file_path)
     

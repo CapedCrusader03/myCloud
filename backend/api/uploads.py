@@ -7,8 +7,9 @@ import json
 from redis_config import redis_client
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db, async_session
-from services import upload_service
-from pydantic import BaseModel
+from services import upload_service, auth_service
+from services.auth_service import get_current_user
+from models.domain import User
 from middleware import rate_limiter
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -23,10 +24,19 @@ class ShareRequest(BaseModel):
     ttl_hours: Optional[int] = 24
     max_downloads: Optional[int] = None
 
+@router.get("")
+async def list_uploads(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await upload_service.list_uploads(db, current_user.id)
+
 @router.post("", dependencies=[Depends(rate_limiter)])
-async def initiate_upload(request: InitiateUploadRequest, db: AsyncSession = Depends(get_db)):
+async def initiate_upload(
+    request: InitiateUploadRequest, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     res = await upload_service.initiate_upload(
         db=db,
+        user_id=current_user.id,
         filename=request.filename,
         total_size=request.total_size,
         chunk_size=request.chunk_size,
@@ -39,7 +49,8 @@ async def receive_chunk(
     upload_id: str, 
     chunk_index: int, 
     request: Request,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     raw_data = await request.body()
     
@@ -55,19 +66,28 @@ async def receive_chunk(
     return {"message": f"Upload not found or failed"}
 
 @router.get("/{upload_id}")
-async def get_upload_status(upload_id: str, db: AsyncSession = Depends(get_db)):
-    res = await upload_service.get_upload_status(db, upload_id)
-    if res:
-        return res
-    from fastapi import HTTPException
-    raise HTTPException(status_code=404, detail="Upload not found")
+async def get_upload_status(
+    upload_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    upload = await upload_service.get_upload_status(db, upload_id)
+    if not upload or upload.user_id != current_user.id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Upload not found")
+        
+    return await upload_service.get_upload_status_dict(upload)
 
 
 @router.delete("/{upload_id}")
-async def cancel_upload(upload_id: str, db: AsyncSession = Depends(get_db)):
-    res = await upload_service.cancel_upload(db, upload_id)
+async def delete_upload(
+    upload_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    res = await upload_service.delete_upload(db, upload_id, user_id=current_user.id)
     if res:
-        return {"message": f"Upload {upload_id} has been cancelled and chunks deleted."}
+        return {"message": f"Upload {upload_id} has been permanently deleted."}
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Upload not found")
 
@@ -159,7 +179,18 @@ async def download_file(token: str, db: AsyncSession = Depends(get_db)):
     )
 
 @router.post("/{upload_id}/share")
-async def share_upload(upload_id: str, request: ShareRequest, db: AsyncSession = Depends(get_db)):
+async def share_upload(
+    upload_id: str, 
+    request: ShareRequest, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify ownership before creating share link
+    upload = await upload_service.get_upload_status(db, upload_id)
+    if not upload or upload.user_id != current_user.id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Upload not found")
+        
     slug = await upload_service.create_share_link(
         db, 
         upload_id, 
