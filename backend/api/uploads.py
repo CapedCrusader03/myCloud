@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 import os
+from typing import Optional
 import asyncio
 import json
 from redis_config import redis_client
@@ -17,6 +18,10 @@ class InitiateUploadRequest(BaseModel):
     total_size: int
     chunk_size: int
     file_checksum: str
+
+class ShareRequest(BaseModel):
+    ttl_hours: Optional[int] = 24
+    max_downloads: Optional[int] = None
 
 @router.post("", dependencies=[Depends(rate_limiter)])
 async def initiate_upload(request: InitiateUploadRequest, db: AsyncSession = Depends(get_db)):
@@ -152,3 +157,32 @@ async def download_file(token: str, db: AsyncSession = Depends(get_db)):
         filename=filename,
         media_type="application/octet-stream"
     )
+
+@router.post("/{upload_id}/share")
+async def share_upload(upload_id: str, request: ShareRequest, db: AsyncSession = Depends(get_db)):
+    slug = await upload_service.create_share_link(
+        db, 
+        upload_id, 
+        ttl_hours=request.ttl_hours, 
+        max_downloads=request.max_downloads
+    )
+    if slug:
+        return {"slug": slug, "share_url": f"/s/{slug}"}
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Upload not found or not complete")
+
+@router.get("/s/{slug}", include_in_schema=False)
+async def resolve_share(slug: str, db: AsyncSession = Depends(get_db)):
+    # Note: We use include_in_schema=False because this is a vanity URL
+    token, status = await upload_service.resolve_share_link(db, slug)
+    
+    if status == "OK":
+        return RedirectResponse(url=f"/uploads/download/{token}")
+    
+    from fastapi import HTTPException
+    if status == "EXPIRED":
+        raise HTTPException(status_code=410, detail="Share link has expired")
+    if status == "LIMIT_REACHED":
+        raise HTTPException(status_code=403, detail="Download limit reached for this link")
+    
+    raise HTTPException(status_code=404, detail="Share link not found")

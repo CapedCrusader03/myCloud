@@ -1,4 +1,6 @@
 import uuid
+import string
+import random
 import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -224,7 +226,8 @@ async def generate_download_token(db: AsyncSession, upload_id: str):
     
     payload = {
         "upload_id": str(upload.id),
-        "exp": expires_at
+        "exp": expires_at,
+        "jti": str(uuid.uuid4()) # Uniqueness for DB constraint
     }
     
     token_str = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -255,3 +258,58 @@ async def validate_download_token(db: AsyncSession, token: str):
         return None
         
     return db_token.upload_id
+
+def generate_slug(length: int = 8):
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
+
+async def create_share_link(db: AsyncSession, upload_id: str, ttl_hours: int = 24, max_downloads: int = None):
+    try:
+        uid = uuid.UUID(upload_id)
+    except ValueError:
+        return None
+        
+    upload = await db.get(Upload, uid)
+    if not upload or upload.status != "complete":
+        return None
+        
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    slug = generate_slug()
+    
+    # Rare collision check (simple)
+    stmt = select(ShareLink).where(ShareLink.slug == slug)
+    if await db.scalar(stmt):
+        slug = generate_slug(length=10) # Fallback to slightly longer if collided
+        
+    db_share = ShareLink(
+        upload_id=upload.id,
+        slug=slug,
+        max_downloads=max_downloads,
+        expires_at=expires_at
+    )
+    db.add(db_share)
+    await db.commit()
+    
+    return slug
+
+async def resolve_share_link(db: AsyncSession, slug: str):
+    stmt = select(ShareLink).where(ShareLink.slug == slug)
+    result = await db.execute(stmt)
+    share = result.scalar_one_or_none()
+    
+    if not share:
+        return None, "NOT_FOUND"
+        
+    if share.expires_at < datetime.now(timezone.utc):
+        return None, "EXPIRED"
+        
+    if share.max_downloads is not None and share.download_count >= share.max_downloads:
+        return None, "LIMIT_REACHED"
+        
+    # Atomic increment
+    share.download_count += 1
+    await db.commit()
+    
+    # Generate a fresh download token for this specific access
+    token = await generate_download_token(db, str(share.upload_id))
+    return token, "OK"
