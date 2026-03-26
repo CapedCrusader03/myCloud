@@ -39,3 +39,28 @@ class Chunk(Base):
 
     # Relationship back to upload
     upload: Mapped["Upload"] = relationship("Upload", back_populates="chunks")
+
+
+class DownloadToken(Base):
+    __tablename__ = "download_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(500), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    upload: Mapped["Upload"] = relationship("Upload")
+
+
+class ShareLink(Base):
+    __tablename__ = "share_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), index=True)
+    slug: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    max_downloads: Mapped[Optional[int]] = mapped_column(Integer)
+    download_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    upload: Mapped["Upload"] = relationship("Upload")
