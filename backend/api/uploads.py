@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+from redis_config import redis_client
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import get_db
+from database import get_db, async_session
 from services import upload_service
 from pydantic import BaseModel
+from middleware import rate_limiter
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
@@ -12,7 +17,7 @@ class InitiateUploadRequest(BaseModel):
     chunk_size: int
     file_checksum: str
 
-@router.post("")
+@router.post("", dependencies=[Depends(rate_limiter)])
 async def initiate_upload(request: InitiateUploadRequest, db: AsyncSession = Depends(get_db)):
     res = await upload_service.initiate_upload(
         db=db,
@@ -23,7 +28,7 @@ async def initiate_upload(request: InitiateUploadRequest, db: AsyncSession = Dep
     )
     return res
 
-@router.patch("/{upload_id}/chunks/{chunk_index}")
+@router.patch("/{upload_id}/chunks/{chunk_index}", dependencies=[Depends(rate_limiter)])
 async def receive_chunk(
     upload_id: str, 
     chunk_index: int, 
@@ -72,3 +77,36 @@ async def resume_upload_status(upload_id: str, response: Response, db: AsyncSess
     response.headers["Upload-Offset"] = str(len(received_set))
     response.headers["X-Missing-Chunks"] = ",".join(missing_chunks)
     return
+
+@router.get("/{upload_id}/events")
+async def stream_upload_events(upload_id: str):
+    """
+    Server-Sent Events (SSE) endpoint to stream progress.
+    The browser's frontend uses 'new EventSource("/uploads/{id}/events")'
+    """
+    async def event_generator():
+        # 1. Immediate flush to establish connection
+        yield ": ok\n\n"
+        
+        # 2. INITIAL SYNC: Send the current state from DB instantly!
+        async with async_session() as db_session:
+            status = await upload_service.get_upload_status(db_session, upload_id)
+            if status:
+                # Add an event_type so the frontend knows how to parse it consistently
+                status["event_type"] = "INITIAL_SYNC"
+                status["percent"] = (len(status["received_chunks"]) / status["total_chunks"] * 100) if status["total_chunks"] > 0 else 0
+                yield f"data: {json.dumps(status)}\n\n"
+        
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(f"upload:{upload_id}")
+        
+        try:
+            # 2. Use the async iterator for cleaner message handling
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    yield f"data: {message['data']}\n\n"
+        except asyncio.CancelledError:
+            await pubsub.unsubscribe(f"upload:{upload_id}")
+            await pubsub.close()
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

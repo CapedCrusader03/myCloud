@@ -7,9 +7,32 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 from models.domain import Upload, Chunk
 import hashlib
+import json
 from services import storage_service
+from redis_config import redis_client
 
 logger = logging.getLogger(__name__)
+
+async def broadcast_upload_event(upload: Upload, event_type: str, extra: dict = None):
+    """Centralized helper to broadcast SSE events via Redis"""
+    payload = {
+        "upload_id": str(upload.id),
+        "status": upload.status,
+        "event_type": event_type,
+        "total_chunks": upload.total_chunks,
+        "percent": 0.0,
+    }
+    
+    # Calculate progress if applicable
+    if upload.total_chunks > 0:
+        # Note: In a high-perf scenario, we might pass the 'uploaded_count' 
+        # to avoid a DB query here, but for clarity we'll use the upload object if available.
+        pass
+
+    if extra:
+        payload.update(extra)
+        
+    await redis_client.publish(f"upload:{upload.id}", json.dumps(payload))
 
 async def initiate_upload(
     db: AsyncSession, 
@@ -88,24 +111,40 @@ async def process_incoming_chunk(
     stmt = select(func.count()).where(Chunk.upload_id == upload.id, Chunk.is_uploaded == True)
     uploaded_count = await db.scalar(stmt)
     
+    percent = (uploaded_count / upload.total_chunks) * 100
+    
+    # BROADCAST PROGRESS
+    await broadcast_upload_event(upload, "CHUNK_RECEIVED", {
+        "received_chunks": uploaded_count,
+        "percent": percent
+    })
+    
     if uploaded_count == upload.total_chunks and upload.status == "uploading":
         upload.status = "assembling"
         await db.commit()
         
-        # Trigger the storage_service stitcher
-        actual_checksum = await storage_service.assemble_file(
-            str(upload.id), 
-            upload.total_chunks, 
-            upload.filename
-        )
+        # BROADCAST ASSEMBLY START
+        await broadcast_upload_event(upload, "ASSEMBLY_STARTED", {
+            "received_chunks": uploaded_count,
+            "percent": 100.0
+        })
         
-        # Very Important: Check for corruption!
-        if actual_checksum == upload.file_checksum:
+        success = await storage_service.assemble_file(upload.id, upload.filename, upload.file_checksum)
+        
+        if success:
             upload.status = "complete"
+            event_type = "UPLOAD_COMPLETE"
         else:
-            upload.status = "corrupted"
+            upload.status = "error"
+            event_type = "UPLOAD_ERROR"
             
         await db.commit()
+        
+        # BROADCAST FINAL RESULT
+        await broadcast_upload_event(upload, event_type, {
+            "received_chunks": uploaded_count,
+            "percent": 100.0
+        })
         
     return True
 
@@ -149,5 +188,8 @@ async def cancel_upload(db: AsyncSession, upload_id: str):
     # Mark as cancelled so users can't PATCH to it anymore
     upload.status = "cancelled"
     await db.commit()
+    
+    # BROADCAST CANCELLATION
+    await broadcast_upload_event(upload, "UPLOAD_CANCELLED")
     
     return True

@@ -3,8 +3,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from database import async_session
 from models.domain import Upload
+from services.upload_service import broadcast_upload_event
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,9 @@ async def cleanup_stale_assemblies():
                 stale_uploads = result.scalars().all()
                 
                 for upload in stale_uploads:
-                    logger.warning(f"Resetting stale assembly for upload {upload.id}")
+                    logger.info(f"Worker: Resetting upload {upload.id} to 'uploading'")
                     upload.status = "uploading"
+                    await broadcast_upload_event(upload, "UPLOAD_RECOVERED")
                 
                 if stale_uploads:
                     await db.commit()
