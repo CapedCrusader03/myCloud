@@ -183,11 +183,32 @@ export default function App() {
       if (missingArray && !missingArray.includes(i)) continue;
       const start = i * CHUNK_SIZE;
       const chunk = f.slice(start, Math.min(start + CHUNK_SIZE, f.size));
-      try {
-        await axios.patch(`${API_BASE}/uploads/${uploadId}/chunks/${i}`, chunk, {
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
-      } catch { return; }
+
+      let attempt = 0;
+      const MAX_RETRIES = 5;
+
+      while (attempt <= MAX_RETRIES) {
+        try {
+          await axios.patch(`${API_BASE}/uploads/${uploadId}/chunks/${i}`, chunk, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+          });
+          break; // success — move to next chunk
+        } catch (err: any) {
+          const status = err?.response?.status;
+          attempt++;
+          if (attempt > MAX_RETRIES) {
+            console.error(`Chunk ${i} failed after ${MAX_RETRIES} retries.`);
+            return; // give up on this upload
+          }
+          // Respect Retry-After for 429, otherwise exponential backoff
+          const retryAfterHeader = err?.response?.headers?.['retry-after'];
+          const waitMs = status === 429 && retryAfterHeader
+            ? parseInt(retryAfterHeader) * 1000
+            : Math.min(1000 * 2 ** attempt, 30_000); // 2s, 4s, 8s… capped at 30s
+          console.warn(`Chunk ${i} failed (${status}), retrying in ${waitMs}ms (attempt ${attempt}/${MAX_RETRIES})…`);
+          await new Promise(res => setTimeout(res, waitMs));
+        }
+      }
     }
   };
 
@@ -300,9 +321,9 @@ export default function App() {
           <div className="storage-info">
             <p className="storage-text"><strong>{formatBytes(files.reduce((a, f) => a + f.total_size, 0))}</strong> used</p>
             <div className="storage-bar-track">
-              <div className="storage-bar-fill" style={{ width: `${Math.min(100, (files.reduce((a, f) => a + f.total_size, 0) / (1024 * 1024 * 1024)) * 100).toFixed(1)}%` }} />
+              <div className="storage-bar-fill" style={{ width: `${Math.min(100, (files.reduce((a, f) => a + f.total_size, 0) / (5 * 1024 * 1024 * 1024)) * 100).toFixed(1)}%` }} />
             </div>
-            <p className="storage-text">of 1 GB</p>
+            <p className="storage-text">of 5 GB</p>
           </div>
         </aside>
 
@@ -340,7 +361,7 @@ export default function App() {
                 <FileIcon size={24} color="var(--blue)" />
                 <div>
                   <p className="upload-progress-name">{upload.filename}</p>
-                  <p className="upload-progress-subtitle">{upload.receivedChunks}/{upload.totalChunks} chunks</p>
+                  <p className="upload-progress-subtitle">{upload.percent.toFixed(1)}% complete</p>
                 </div>
                 <span className={`upload-status-chip ${statusChip}`}>
                   {upload.status === 'uploading' && <><Loader2 size={12} className="spin" /> Uploading</>}
