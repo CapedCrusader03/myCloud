@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   Upload as UploadIcon,
@@ -17,6 +17,8 @@ import {
   HardDrive,
   Trash2,
   X,
+  Pause,
+  Play,
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -26,7 +28,7 @@ interface UploadState {
   id: string;
   filename: string;
   percent: number;
-  status: 'uploading' | 'assembling' | 'complete' | 'error' | 'idle';
+  status: 'uploading' | 'assembling' | 'complete' | 'error' | 'idle' | 'paused';
   totalChunks: number;
   receivedChunks: number;
 }
@@ -57,6 +59,11 @@ export default function App() {
   const [shareFilename, setShareFilename] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [searchQ, setSearchQ] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+
+  // Use refs for the upload loop to avoid closure issues
+  const isPausedRef = useRef(false);
+  const isCancelledRef = useRef(false);
 
   // Auth
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
@@ -160,7 +167,10 @@ export default function App() {
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.[0]) setFile(e.target.files[0]);
+    if (e.target.files?.[0]) {
+      setFile(e.target.files[0]);
+      e.target.value = ''; // FIX: Allow re-uploading same file
+    }
   };
 
   const calculateChecksum = async (f: File) => {
@@ -171,6 +181,9 @@ export default function App() {
 
   const startUpload = async () => {
     if (!file) return;
+    isCancelledRef.current = false;
+    isPausedRef.current = false;
+    setIsPaused(false);
     try {
       const checksum = await calculateChecksum(file);
       const { data: init } = await axios.post(`${API_BASE}/uploads`, {
@@ -187,14 +200,22 @@ export default function App() {
 
       setUpload({ id: uploadId, filename: file.name, percent: 0, status: 'uploading', totalChunks: Math.ceil(file.size / CHUNK_SIZE), receivedChunks: 0 });
       await uploadChunks(file, uploadId, missing);
-    } catch {
-      alert('Upload failed. Try again.');
+    } catch (err: any) {
+      if (err?.response?.status === 400) alert(err.response.data.detail);
+      else alert('Upload failed. Try again.');
     }
   };
 
   const uploadChunks = async (f: File, uploadId: string, missingArray: number[] | null) => {
     const totalChunks = Math.ceil(f.size / CHUNK_SIZE);
     for (let i = 0; i < totalChunks; i++) {
+      if (isCancelledRef.current) return;
+      
+      // PAUSE CHECK: Wait if paused
+      while (isPausedRef.current && !isCancelledRef.current) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+
       if (missingArray && !missingArray.includes(i)) continue;
       const start = i * CHUNK_SIZE;
       const chunk = f.slice(start, Math.min(start + CHUNK_SIZE, f.size));
@@ -203,6 +224,7 @@ export default function App() {
       const MAX_RETRIES = 5;
 
       while (attempt <= MAX_RETRIES) {
+        if (isCancelledRef.current) return;
         try {
           await axios.patch(`${API_BASE}/uploads/${uploadId}/chunks/${i}`, chunk, {
             headers: { 'Content-Type': 'application/octet-stream' },
@@ -248,12 +270,31 @@ export default function App() {
     try {
       await axios.delete(`${API_BASE}/uploads/${id}`);
       if (upload?.id === id) {
+        isCancelledRef.current = true;
         setUpload(null);
         setFile(null);
       }
       fetchFiles();
     }
     catch { alert('Delete failed.'); }
+  };
+
+  const handleCancelUpload = async () => {
+    if (!upload?.id) return;
+    if (!confirm('Cancel this upload and discard progress?')) return;
+    isCancelledRef.current = true;
+    try {
+      await axios.delete(`${API_BASE}/uploads/${upload.id}`);
+      setUpload(null);
+      setFile(null);
+    } catch { alert('Cancel failed.'); }
+  };
+
+  const togglePause = () => {
+    const newVal = !isPaused;
+    setIsPaused(newVal);
+    isPausedRef.current = newVal;
+    if (upload) setUpload({ ...upload, status: newVal ? 'paused' : 'uploading' });
   };
 
   const handleDownload = async () => {
@@ -389,6 +430,7 @@ export default function App() {
                 </div>
                 <span className={`upload-status-chip ${statusChip}`}>
                   {upload.status === 'uploading' && <><Loader2 size={12} className="spin" /> Uploading</>}
+                  {upload.status === 'paused' && <><Pause size={12} /> Paused</>}
                   {upload.status === 'assembling' && 'Assembling'}
                   {upload.status === 'complete' && <><CheckCircle size={12} /> Complete</>}
                   {upload.status === 'error' && <><AlertCircle size={12} /> Error</>}
@@ -397,13 +439,26 @@ export default function App() {
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: `${upload.percent}%` }} />
               </div>
-              <div className="upload-actions">
+              <div className="upload-actions" style={{ gap: '0.5rem' }}>
+                {(upload.status === 'uploading' || upload.status === 'paused') && (
+                  <>
+                    <button className="btn-secondary" onClick={togglePause}>
+                      {isPaused ? <><Play size={14} /> Resume</> : <><Pause size={14} /> Pause</>}
+                    </button>
+                    <button className="btn-text" onClick={handleCancelUpload} style={{ color: 'var(--red)' }}>
+                      <X size={14} /> Cancel
+                    </button>
+                  </>
+                )}
                 {upload.status === 'complete' && (
                   <>
                     <button className="btn-primary" onClick={handleDownload}><Download size={14} /> Download</button>
                     <button className="btn-secondary" onClick={handleShare}><Share2 size={14} /> Share</button>
                     <button className="btn-text" onClick={() => { setUpload(null); setFile(null); setShareUrl(null); fetchFiles(); }}>← Back to Drive</button>
                   </>
+                )}
+                {upload.status === 'error' && (
+                  <button className="btn-text" onClick={() => { setUpload(null); setFile(null); }}>Discard</button>
                 )}
               </div>
             </div>

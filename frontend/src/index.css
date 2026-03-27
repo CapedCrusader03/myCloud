@@ -352,6 +352,7 @@ html, body, #root {
 }
 
 .chip-uploading  { background: var(--blue-light); color: var(--blue); }
+.chip-paused     { background: var(--gray-100); color: var(--gray-700); }
 .chip-assembling { background: #fef7e0; color: #f29900; }
 .chip-complete   { background: var(--green-light); color: var(--green); }
 .chip-error      { background: var(--red-light); color: var(--red); }
