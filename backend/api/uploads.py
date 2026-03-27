@@ -210,18 +210,3 @@ async def share_upload(
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Upload not found or not complete")
 
-@router.get("/s/{slug}", include_in_schema=False)
-async def resolve_share(slug: str, db: AsyncSession = Depends(get_db)):
-    # Note: We use include_in_schema=False because this is a vanity URL
-    token, status = await upload_service.resolve_share_link(db, slug)
-    
-    if status == "OK":
-        return RedirectResponse(url=f"/uploads/download/{token}")
-    
-    from fastapi import HTTPException
-    if status == "EXPIRED":
-        raise HTTPException(status_code=410, detail="Share link has expired")
-    if status == "LIMIT_REACHED":
-        raise HTTPException(status_code=403, detail="Download limit reached for this link")
-    
-    raise HTTPException(status_code=404, detail="Share link not found")

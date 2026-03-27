@@ -49,6 +49,14 @@ export default function App() {
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
   const [password, setPassword] = useState('');
 
+  // Handle /s/{slug} share link routing — redirect to backend for resolution
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path.startsWith('/s/')) {
+      window.location.replace(`${API_BASE}${path}`);
+    }
+  }, []);
+
   // Configure Axios Defaults
   useEffect(() => {
     if (token) {
@@ -336,7 +344,10 @@ export default function App() {
           <h1>myCloud</h1>
           <p className="subtitle">High-performance resumable file transfers.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button className="btn-secondary-sm" onClick={() => { setUpload(null); setFile(null); setShareUrl(null); }}>
+            Dashboard
+          </button>
           <div className="user-badge">
             <UserIcon size={14} />
             <span>{email}</span>
@@ -424,7 +435,7 @@ export default function App() {
           
           {upload.status === 'complete' && (
             <button className="btn" style={{ marginTop: '1rem', width: '100%', background: 'transparent', border: '1px solid var(--glass-border)' }} onClick={() => {setUpload(null); setFile(null); setShareUrl(null);}}>
-              Upload Another File
+              ← Back to Dashboard
             </button>
           )}
         </div>

@@ -11,5 +11,10 @@ export default defineConfig({
     host: true,
     strictPort: true,
     port: 5173,
+    proxy: {
+      // Forward share links directly to the backend — only match /s/{slug}, NOT /src/
+      '^/s/': { target: 'http://api:8000', changeOrigin: true },
+      '/uploads/download': { target: 'http://api:8000', changeOrigin: true },
+    },
   },
 })
