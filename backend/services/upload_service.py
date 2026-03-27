@@ -13,6 +13,7 @@ import json
 from jose import jwt, JWTError
 from services import storage_service
 from redis_config import redis_client
+from fastapi import HTTPException
 
 # JWT Configuration
 SECRET_KEY = "mycloud-super-secret-key-123"
@@ -50,6 +51,16 @@ async def initiate_upload(
     chunk_size: int, 
     file_checksum: str
 ):
+    # 5 GB Storage Cap (5 * 1024 * 1024 * 1024)
+    MAX_STORAGE = 5 * 1024 * 1024 * 1024
+    current_storage = await get_total_storage_used(db, user_id)
+    
+    if current_storage + total_size > MAX_STORAGE:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Storage limit exceeded. Remaining space: {(MAX_STORAGE - current_storage) / (1024*1024):.2f} MB"
+        )
+
     upload_id = uuid.uuid4()
     total_chunks = (total_size + chunk_size - 1) // chunk_size
     
@@ -357,3 +368,10 @@ async def delete_upload(db: AsyncSession, upload_id: str, user_id: uuid.UUID = N
     await db.commit()
     
     return True
+
+async def get_total_storage_used(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """Sum total_size of all non-deleted uploads for a user"""
+    stmt = select(func.sum(Upload.total_size)).where(Upload.user_id == user_id)
+    result = await db.execute(stmt)
+    usage = result.scalar()
+    return usage or 0
