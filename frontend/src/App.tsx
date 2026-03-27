@@ -41,6 +41,7 @@ export default function App() {
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [dashboardShareUrl, setDashboardShareUrl] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   
   // Auth State
@@ -287,7 +288,7 @@ export default function App() {
   const handleShareFile = async (id: string) => {
     try {
       const { data } = await axios.post(`${API_BASE}/uploads/${id}/share`, { ttl_hours: 24 });
-      setShareUrl(`${window.location.origin}${data.share_url}`);
+      setDashboardShareUrl(`${window.location.origin}${data.share_url}`);
     } catch (err) {
       alert("Failed to share.");
     }
@@ -468,6 +469,24 @@ export default function App() {
               </div>
             ))}
           </div>
+
+          {dashboardShareUrl && (
+            <div className="share-box" style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Public Share Link (expires in 24h)</p>
+                <button onClick={() => setDashboardShareUrl(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+              </div>
+              <div className="share-input-group">
+                <input readOnly value={dashboardShareUrl} />
+                <button onClick={() => { navigator.clipboard.writeText(dashboardShareUrl); alert('Copied!'); }} title="Copy">
+                  <Copy size={16} />
+                </button>
+                <a href={dashboardShareUrl} target="_blank" rel="noreferrer" title="Open">
+                  <ExternalLink size={16} />
+                </a>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
