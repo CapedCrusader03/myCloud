@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
-from jose import jwt
-from passlib.context import CryptContext
+from jose import jwt, JWTError
+import bcrypt
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -10,16 +11,16 @@ from database import get_db
 from models.domain import User
 import os
 
-PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 SECRET_KEY = "mycloud-auth-secret-key-456" # Use environment variables in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours for dev convenience
 
-def verify_password(plain_password, hashed_password):
-    return PWD_CONTEXT.verify(plain_password, hashed_password)
+def verify_password(plain_password: str, hashed_password: str):
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
-def get_password_hash(password):
-    return PWD_CONTEXT.hash(password)
+def get_password_hash(password: str):
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def create_access_token(data: dict):
     to_encode = data.copy()

@@ -211,14 +211,13 @@ export default function App() {
 
   const uploadChunks = async (file: File, uploadId: string, missingArray: number[] | null) => {
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    
-    for (let i = 1; i <= totalChunks; i++) {
+    for (let i = 0; i < totalChunks; i++) {
         // If we have a list of missing chunks (from a resume), skip the ones we already have
         if (missingArray && !missingArray.includes(i)) {
             continue;
         }
 
-        const start = (i - 1) * CHUNK_SIZE;
+        const start = i * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
 

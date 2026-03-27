@@ -10,6 +10,8 @@ from database import get_db, async_session
 from services import upload_service, auth_service
 from services.auth_service import get_current_user
 from models.domain import User
+from pydantic import BaseModel
+from typing import Optional
 from middleware import rate_limiter
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -79,6 +81,26 @@ async def get_upload_status(
     return await upload_service.get_upload_status_dict(upload)
 
 
+@router.head("/{upload_id}")
+async def resume_upload_status(
+    upload_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    upload = await upload_service.get_upload_status(db, upload_id)
+    if not upload or upload.user_id != current_user.id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Upload not found")
+        
+    res = await upload_service.get_upload_status_dict(upload)
+    received_chunks = res["received_chunks"]
+    headers = {
+        "Upload-Offset": str(len(received_chunks) * upload.chunk_size),
+        "X-Missing-Chunks": ",".join(map(str, [i for i in range(upload.total_chunks) if i not in received_chunks]))
+    }
+    from fastapi.responses import Response
+    return Response(headers=headers)
+
 @router.delete("/{upload_id}")
 async def delete_upload(
     upload_id: str, 
@@ -91,21 +113,7 @@ async def delete_upload(
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Upload not found")
 
-@router.head("/{upload_id}", status_code=200)
-async def resume_upload_status(upload_id: str, response: Response, db: AsyncSession = Depends(get_db)):
-    # Re-use our GET status logic to find what's missing
-    res = await upload_service.get_upload_status(db, upload_id)
-    if not res:
-        response.status_code = 404
-        return
-        
-    received_set = set(res["received_chunks"])
-    missing_chunks = [str(i) for i in range(1, res["total_chunks"] + 1) if i not in received_set]
-    
-    # Send instructions back to the client via HTTP headers
-    response.headers["Upload-Offset"] = str(len(received_set))
-    response.headers["X-Missing-Chunks"] = ",".join(missing_chunks)
-    return
+
 
 @router.get("/{upload_id}/events")
 async def stream_upload_events(upload_id: str):
@@ -119,12 +127,12 @@ async def stream_upload_events(upload_id: str):
         
         # 2. INITIAL SYNC: Send the current state from DB instantly!
         async with async_session() as db_session:
-            status = await upload_service.get_upload_status(db_session, upload_id)
-            if status:
-                # Add an event_type so the frontend knows how to parse it consistently
-                status["event_type"] = "INITIAL_SYNC"
-                status["percent"] = (len(status["received_chunks"]) / status["total_chunks"] * 100) if status["total_chunks"] > 0 else 0
-                yield f"data: {json.dumps(status)}\n\n"
+            upload = await upload_service.get_upload_status(db_session, upload_id)
+            if upload:
+                status_dict = await upload_service.get_upload_status_dict(upload)
+                status_dict["event_type"] = "INITIAL_SYNC"
+                status_dict["percent"] = (len(status_dict["received_chunks"]) / upload.total_chunks * 100) if upload.total_chunks > 0 else 0
+                yield f"data: {json.dumps(status_dict)}\n\n"
         
         pubsub = redis_client.pubsub()
         await pubsub.subscribe(f"upload:{upload_id}")
@@ -160,12 +168,12 @@ async def download_file(token: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     
     # Get upload info for filename
-    status = await upload_service.get_upload_status(db, str(upload_id))
-    if not status:
+    upload = await upload_service.get_upload_status(db, str(upload_id))
+    if not upload:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="File not found")
         
-    filename = status["filename"]
+    filename = upload.filename
     file_path = f"chunks/{upload_id}_{filename}"
     
     if not os.path.exists(file_path):

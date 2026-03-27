@@ -36,7 +36,7 @@ async def assemble_file(upload_id: str, total_chunks: int, final_filename: str):
         sha256_hash = hashlib.sha256()
 
         with open(final_path, "wb") as f:
-            for i in range(1, total_chunks + 1):
+            for i in range(total_chunks):
                 chunk_path = os.path.join(upload_dir, f"{i}.part")
                 with open(chunk_path, "rb") as chunk_file:
                     chunk_data = chunk_file.read()
