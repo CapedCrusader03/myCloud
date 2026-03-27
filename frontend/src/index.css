@@ -62,6 +62,16 @@ html, body, #root {
   min-width: var(--sidebar-w);
   padding-left: 0.5rem;
   text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.header-logo:hover {
+  opacity: 0.85;
+}
+
+.header-logo:active {
+  transform: scale(0.98);
 }
 
 .header-logo-icon {

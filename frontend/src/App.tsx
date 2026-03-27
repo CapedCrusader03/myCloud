@@ -143,6 +143,14 @@ export default function App() {
 
   const handleLogout = () => { setToken(null); setFiles([]); setUpload(null); };
 
+  const handleHomeClick = () => {
+    setUpload(null);
+    setFile(null);
+    setShareUrl(null);
+    setSearchQ('');
+    fetchFiles();
+  };
+
   // Upload
   const handleNewUploadClick = () => {
     setUpload(null);
@@ -271,10 +279,10 @@ export default function App() {
   if (!token) {
     return (
       <div className="auth-page">
-        <div className="auth-card">
-          <div className="auth-logo">
-            <div className="auth-logo-icon">m</div>
-            <h1>my<span>Cloud</span></h1>
+        <div className="auth-card" style={{ textAlign: 'center' }}>
+          <div className="header-logo" style={{ marginBottom: '2rem', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div className="header-logo-icon">m</div>
+            <span className="header-logo-text">my<span style={{ color: 'var(--blue)' }}>Cloud</span></span>
           </div>
           <p className="auth-subtitle">
             {authView === 'login' ? 'Sign in to your drive' : 'Create a new account'}
@@ -302,7 +310,7 @@ export default function App() {
     <>
       {/* Header */}
       <header className="app-header">
-        <div className="header-logo">
+        <div className="header-logo" onClick={handleHomeClick}>
           <div className="header-logo-icon">m</div>
           <span className="header-logo-text">my<span style={{ color: 'var(--blue)' }}>Cloud</span></span>
         </div>

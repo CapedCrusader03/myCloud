@@ -31,9 +31,9 @@ async def rate_limiter(request: Request):
     client_ip = request.client.host
     key = f"rate_limit:{client_ip}"
     
-    # Defaults: 10 burst tokens, refills at 2 tokens per second
+    # Defaults: 10 burst tokens, refills at 5 tokens per second
     capacity = 10
-    refill_rate = 2
+    refill_rate = 5
     now = time.time()
     
     # Execute the Lua script atomically
