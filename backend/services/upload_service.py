@@ -1,29 +1,37 @@
+"""
+Upload orchestration service.
+
+Handles upload initiation, chunk processing, and assembly.
+Download tokens, share links, and file management are in their
+respective services (download_service, share_service, file_service).
+"""
+
 import uuid
-import string
-import random
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
-from models.domain import Upload, Chunk, DownloadToken, ShareLink
-import hashlib
-import json
-from jose import jwt, JWTError
-from services import storage_service
-from redis_config import redis_client
 from fastapi import HTTPException
 
-# JWT Configuration
-SECRET_KEY = "mycloud-super-secret-key-123"
-ALGORITHM = "HS256"
-TOKEN_EXPIRE_MINUTES = 60
+from config import settings
+from models.domain import Upload, Chunk
+from services import storage_service
+from redis_config import redis_client
 
 logger = logging.getLogger(__name__)
 
-async def broadcast_upload_event(upload: Upload, event_type: str, extra: dict = None):
-    """Centralized helper to broadcast SSE events via Redis"""
+
+# ── SSE Broadcasting ──────────────────────────────────────────────────
+
+async def broadcast_upload_event(
+    upload: Upload, event_type: str, extra: dict | None = None
+) -> None:
+    """Publish an SSE event to the Redis channel for this upload."""
     payload = {
         "upload_id": str(upload.id),
         "status": upload.status,
@@ -31,39 +39,42 @@ async def broadcast_upload_event(upload: Upload, event_type: str, extra: dict = 
         "total_chunks": upload.total_chunks,
         "percent": 0.0,
     }
-    
-    # Calculate progress if applicable
-    if upload.total_chunks > 0:
-        # Note: In a high-perf scenario, we might pass the 'uploaded_count' 
-        # to avoid a DB query here, but for clarity we'll use the upload object if available.
-        pass
-
     if extra:
         payload.update(extra)
-        
+
     await redis_client.publish(f"upload:{upload.id}", json.dumps(payload))
 
+
+# ── Upload Initiation ─────────────────────────────────────────────────
+
+async def get_total_storage_used(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """Sum total_size of all non-deleted uploads for a user."""
+    stmt = select(func.sum(Upload.total_size)).where(Upload.user_id == user_id)
+    result = await db.execute(stmt)
+    return result.scalar() or 0
+
+
 async def initiate_upload(
-    db: AsyncSession, 
+    db: AsyncSession,
     user_id: uuid.UUID,
-    filename: str, 
-    total_size: int, 
-    chunk_size: int, 
-    file_checksum: str
-):
-    # 5 GB Storage Cap (5 * 1024 * 1024 * 1024)
-    MAX_STORAGE = 5 * 1024 * 1024 * 1024
+    filename: str,
+    total_size: int,
+    chunk_size: int,
+    file_checksum: str,
+) -> dict:
+    """Create a new upload record after validating the storage quota."""
     current_storage = await get_total_storage_used(db, user_id)
-    
-    if current_storage + total_size > MAX_STORAGE:
+
+    if current_storage + total_size > settings.max_storage_bytes:
+        remaining = (settings.max_storage_bytes - current_storage) / (1024 * 1024)
         raise HTTPException(
-            status_code=400, 
-            detail=f"Storage limit exceeded. Remaining space: {(MAX_STORAGE - current_storage) / (1024*1024):.2f} MB"
+            status_code=400,
+            detail=f"Storage limit exceeded. Remaining space: {remaining:.2f} MB",
         )
 
     upload_id = uuid.uuid4()
     total_chunks = (total_size + chunk_size - 1) // chunk_size
-    
+
     new_upload = Upload(
         id=upload_id,
         filename=filename,
@@ -74,7 +85,7 @@ async def initiate_upload(
         status="uploading",
         user_id=user_id,
         created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7)
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
     )
 
     db.add(new_upload)
@@ -82,42 +93,50 @@ async def initiate_upload(
     await db.refresh(new_upload)
     return {"upload_id": str(new_upload.id)}
 
+
+# ── Chunk Processing ──────────────────────────────────────────────────
+
 async def process_incoming_chunk(
     db: AsyncSession,
     upload_id: str,
     chunk_index: int,
-    raw_data: bytes
-):
-    # 1. Fetch upload with a ROW LOCK (SELECT FOR UPDATE)
-    # This ensures that if 10 chunks arrive at once, they wait their turn
-    # to update the database and check the total count.
-    stmt_upload = select(Upload).where(Upload.id == uuid.UUID(upload_id)).with_for_update()
+    raw_data: bytes,
+) -> bool:
+    """
+    Process a single chunk: validate, write to storage, update DB.
+    Returns True on success, False if the upload doesn't exist or is finished.
+    """
+    # Row lock to serialize concurrent chunk writes for the same upload
+    stmt_upload = (
+        select(Upload)
+        .where(Upload.id == uuid.UUID(upload_id))
+        .with_for_update()
+    )
     result = await db.execute(stmt_upload)
     upload = result.scalar_one_or_none()
-    
+
     if not upload:
         return False
-        
-    # Guard: If the upload is already finished or cancelled, don't accept more chunks
-    if upload.status in ["complete", "cancelled"]:
+
+    if upload.status in ("complete", "cancelled"):
         return False
-        
-    # Idempotency: If the client accidentally sends Chunk 4 twice, ignore the second one!
+
+    # Idempotency: skip if chunk already exists
     stmt_check = select(Chunk).where(
         Chunk.upload_id == upload.id,
         Chunk.chunk_index == chunk_index,
-        Chunk.is_uploaded == True
+        Chunk.is_uploaded == True,
     )
     if await db.scalar(stmt_check):
-        return True # Chunk already saved, exit early without touching the disk!
-        
+        return True
+
     size = len(raw_data)
     checksum = hashlib.sha256(raw_data).hexdigest()
-    
-    # 2. Write the bytes to the hard drive!
+
+    # Write bytes to storage
     await storage_service.write_chunk(str(upload_id), chunk_index, raw_data)
 
-    # 3. Save the record to the database
+    # Record in database
     upload_chunk = Chunk(
         upload_id=upload.id,
         chunk_index=chunk_index,
@@ -127,37 +146,36 @@ async def process_incoming_chunk(
     )
     db.add(upload_chunk)
     await db.commit()
-    
-    # Check if ALL chunks have been fully received
-    stmt = select(func.count()).where(Chunk.upload_id == upload.id, Chunk.is_uploaded == True)
-    uploaded_count = await db.scalar(stmt)
-    
+
+    # Count progress
+    stmt_count = select(func.count()).where(
+        Chunk.upload_id == upload.id, Chunk.is_uploaded == True
+    )
+    uploaded_count = await db.scalar(stmt_count)
     percent = (uploaded_count / upload.total_chunks) * 100
-    
-    # BROADCAST PROGRESS
-    await broadcast_upload_event(upload, "CHUNK_RECEIVED", {
-        "received_chunks": uploaded_count,
-        "percent": percent
-    })
-    
+
+    await broadcast_upload_event(
+        upload, "CHUNK_RECEIVED", {"received_chunks": uploaded_count, "percent": percent}
+    )
+
+    # Check completion
     if uploaded_count == upload.total_chunks and upload.status == "uploading":
         upload.status = "assembling"
         await db.commit()
-        
-        # BROADCAST ASSEMBLY START
-        await broadcast_upload_event(upload, "ASSEMBLY_STARTED", {
-            "received_chunks": uploaded_count,
-            "percent": 100.0
-        })
-        
+
+        await broadcast_upload_event(
+            upload,
+            "ASSEMBLY_STARTED",
+            {"received_chunks": uploaded_count, "percent": 100.0},
+        )
+
         try:
-            # 3. Trigger assembly and check for corruption
             actual_checksum = await storage_service.assemble_file(
                 upload_id=str(upload.id),
                 total_chunks=upload.total_chunks,
-                final_filename=upload.filename
+                final_filename=upload.filename,
             )
-            
+
             if actual_checksum == upload.file_checksum:
                 upload.status = "complete"
                 event_type = "UPLOAD_COMPLETE"
@@ -165,213 +183,60 @@ async def process_incoming_chunk(
                 upload.status = "error"
                 event_type = "UPLOAD_ERROR"
         except Exception as e:
-            logger.error(f"Assembly failed for {upload.id}: {e}")
+            logger.error("Assembly failed for %s: %s", upload.id, e)
             upload.status = "error"
             event_type = "UPLOAD_ERROR"
-            
+
         await db.commit()
-        
-        # BROADCAST FINAL RESULT
-        await broadcast_upload_event(upload, event_type, {
-            "received_chunks": uploaded_count,
-            "percent": 100.0
-        })
-        
+
+        await broadcast_upload_event(
+            upload, event_type, {"received_chunks": uploaded_count, "percent": 100.0}
+        )
+
     return True
 
-async def get_upload_status(db: AsyncSession, upload_id: str):
+
+# ── Upload Status & Control ───────────────────────────────────────────
+
+async def get_upload_status(db: AsyncSession, upload_id: str) -> Upload | None:
+    """Fetch an upload with its chunks eagerly loaded."""
     try:
         uid = uuid.UUID(upload_id)
     except ValueError:
         return None
-        
-    # Eagerly load the related chunks so we can list their indexes
+
     stmt = select(Upload).options(selectinload(Upload.chunks)).where(Upload.id == uid)
     result = await db.execute(stmt)
-    upload = result.scalar_one_or_none()
-    
-    if not upload:
-        return None
-        
-    return upload
+    return result.scalar_one_or_none()
 
-async def get_upload_status_dict(upload: Upload):
+
+async def get_upload_status_dict(upload: Upload) -> dict:
+    """Serialize upload status to a dict."""
     received_indexes = [c.chunk_index for c in upload.chunks if c.is_uploaded]
-    
     return {
         "upload_id": str(upload.id),
         "filename": upload.filename,
         "status": upload.status,
         "total_chunks": upload.total_chunks,
-        "received_chunks": sorted(received_indexes)
+        "received_chunks": sorted(received_indexes),
     }
 
-async def cancel_upload(db: AsyncSession, upload_id: str):
+
+async def cancel_upload(db: AsyncSession, upload_id: str) -> bool:
+    """Cancel an upload and delete its temporary chunk files."""
     try:
         uid = uuid.UUID(upload_id)
     except ValueError:
         return False
-        
+
     upload = await db.get(Upload, uid)
     if not upload:
         return False
-        
-    # Delete the temporary binary chunk files from the physical hard drive
+
     await storage_service.delete_chunks(upload_id)
-    
-    # Mark as cancelled so users can't PATCH to it anymore
+
     upload.status = "cancelled"
     await db.commit()
-    
-    # BROADCAST CANCELLATION
+
     await broadcast_upload_event(upload, "UPLOAD_CANCELLED")
-    
     return True
-
-async def generate_download_token(db: AsyncSession, upload_id: str):
-    try:
-        uid = uuid.UUID(upload_id)
-    except ValueError:
-        return None
-        
-    upload = await db.get(Upload, uid)
-    if not upload or upload.status != "complete":
-        return None
-        
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=TOKEN_EXPIRE_MINUTES)
-    
-    payload = {
-        "upload_id": str(upload.id),
-        "exp": expires_at,
-        "jti": str(uuid.uuid4()) # Uniqueness for DB constraint
-    }
-    
-    token_str = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    
-    db_token = DownloadToken(
-        upload_id=upload.id,
-        token=token_str,
-        expires_at=expires_at
-    )
-    db.add(db_token)
-    await db.commit()
-    
-    return token_str
-
-async def validate_download_token(db: AsyncSession, token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        upload_id = payload.get("upload_id")
-    except JWTError:
-        return None
-        
-    # Check DB for existence and if it was already used (optional, sticking to multiple-use JWT for now)
-    stmt = select(DownloadToken).where(DownloadToken.token == token)
-    result = await db.execute(stmt)
-    db_token = result.scalar_one_or_none()
-    
-    if not db_token or db_token.expires_at < datetime.now(timezone.utc):
-        return None
-        
-    return db_token.upload_id
-
-def generate_slug(length: int = 8):
-    characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
-
-async def create_share_link(db: AsyncSession, upload_id: str, ttl_hours: int = 24, max_downloads: int = None):
-    try:
-        uid = uuid.UUID(upload_id)
-    except ValueError:
-        return None
-        
-    upload = await db.get(Upload, uid)
-    if not upload or upload.status != "complete":
-        return None
-        
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
-    slug = generate_slug()
-    
-    # Rare collision check (simple)
-    stmt = select(ShareLink).where(ShareLink.slug == slug)
-    if await db.scalar(stmt):
-        slug = generate_slug(length=10) # Fallback to slightly longer if collided
-        
-    db_share = ShareLink(
-        upload_id=upload.id,
-        slug=slug,
-        max_downloads=max_downloads,
-        expires_at=expires_at
-    )
-    db.add(db_share)
-    await db.commit()
-    
-    return slug
-
-async def resolve_share_link(db: AsyncSession, slug: str):
-    stmt = select(ShareLink).where(ShareLink.slug == slug)
-    result = await db.execute(stmt)
-    share = result.scalar_one_or_none()
-    
-    if not share:
-        return None, "NOT_FOUND"
-        
-    if share.expires_at < datetime.now(timezone.utc):
-        return None, "EXPIRED"
-        
-    if share.max_downloads is not None and share.download_count >= share.max_downloads:
-        return None, "LIMIT_REACHED"
-        
-    # Atomic increment
-    share.download_count += 1
-    await db.commit()
-    
-    # Generate a fresh download token for this specific access
-    token = await generate_download_token(db, str(share.upload_id))
-    return token, "OK"
-
-async def list_uploads(db: AsyncSession, user_id: uuid.UUID):
-    stmt = select(Upload).where(Upload.status == "complete", Upload.user_id == user_id).order_by(Upload.created_at.desc())
-    result = await db.execute(stmt)
-    uploads = result.scalars().all()
-    
-    return [
-        {
-            "upload_id": str(u.id),
-            "filename": u.filename,
-            "total_size": u.total_size,
-            "created_at": u.created_at.isoformat(),
-            "status": u.status
-        }
-        for u in uploads
-    ]
-
-async def delete_upload(db: AsyncSession, upload_id: str, user_id: uuid.UUID = None):
-    try:
-        uid = uuid.UUID(upload_id)
-    except ValueError:
-        return False
-        
-    upload = await db.get(Upload, uid)
-    if not upload:
-        return False
-        
-    # Ownership Check
-    if user_id and upload.user_id != user_id:
-        return False
-        
-    # Delete the physical file
-    await storage_service.delete_final_file(str(upload.id), upload.filename)
-    
-    # Delete from DB (Cascade will handle tokens and share links)
-    await db.delete(upload)
-    await db.commit()
-    
-    return True
-
-async def get_total_storage_used(db: AsyncSession, user_id: uuid.UUID) -> int:
-    """Sum total_size of all non-deleted uploads for a user"""
-    stmt = select(func.sum(Upload.total_size)).where(Upload.user_id == user_id)
-    result = await db.execute(stmt)
-    usage = result.scalar()
-    return usage or 0

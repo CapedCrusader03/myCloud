@@ -1,11 +1,16 @@
-import redis.asyncio as redis
-import os
+"""
+Redis client configuration.
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+Connection URL is sourced from config.settings.
+"""
+
+import redis.asyncio as redis
+from config import settings
 
 # Singleton-style Redis client
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+
 
 async def get_redis():
-    """Dependency for providing a redis connection"""
+    """Dependency for providing a redis connection."""
     return redis_client

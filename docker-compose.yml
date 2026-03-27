@@ -1,16 +1,15 @@
-version: '3.8'
-
 services:
   # FastAPI Backend
   api:
     build:
       context: ./backend
-      # Assuming a standard Dockerfile in ./backend
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - chunk_data:/app/chunks
+    env_file:
+      - ./backend/.env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/mycloud
       - REDIS_URL=redis://redis:6379/0
@@ -19,6 +18,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    restart: unless-stopped
+    # In dev, volume mounts are root-owned; in prod (no volumes), Dockerfile's appuser is used
+    user: root
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # PostgreSQL Database
@@ -37,6 +39,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # Redis for pub/sub (SSE) and rate limiting
   redis:
@@ -45,12 +48,12 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
 
   # React Frontend (Vite + TypeScript)
   frontend:
     build:
       context: ./frontend
-      # Assuming a standard Dockerfile in ./frontend
     ports:
       - "5173:5173"
     volumes:
@@ -61,6 +64,7 @@ services:
     command: npm run dev -- --host
     depends_on:
       - api
+    restart: unless-stopped
 
 volumes:
   postgres_data:

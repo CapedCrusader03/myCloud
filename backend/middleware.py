@@ -1,14 +1,20 @@
+"""
+Rate limiting middleware using a Redis-backed token bucket algorithm.
+
+All tunables are sourced from config.settings.
+"""
+
 import time
-import asyncio
-from fastapi import HTTPException, Request, Depends
+from fastapi import HTTPException, Request
 from redis_config import redis_client
+from config import settings
 
 # Lua script for atomic Token Bucket
 # KEYS[1] = bucket key
 # ARGV[1] = capacity
 # ARGV[2] = refill_rate (tokens/sec)
-# ARGV[3] = now
-token_bucket_lua = """
+# ARGV[3] = now (unix timestamp)
+TOKEN_BUCKET_LUA = """
 local bucket = redis.call('HMGET', KEYS[1], 'last_refill', 'tokens')
 local last_refill = tonumber(bucket[1]) or tonumber(ARGV[3])
 local tokens = tonumber(bucket[2]) or tonumber(ARGV[1])
@@ -26,20 +32,25 @@ else
 end
 """
 
-async def rate_limiter(request: Request):
-    # Simple IP-based key
+
+async def rate_limiter(request: Request) -> bool:
+    """FastAPI dependency that enforces per-IP rate limiting."""
     client_ip = request.client.host
     key = f"rate_limit:{client_ip}"
-    
-    # Defaults: 10 burst tokens, refills at 5 tokens per second
-    capacity = 10
-    refill_rate = 5
-    now = time.time()
-    
-    # Execute the Lua script atomically
-    allowed = await redis_client.eval(token_bucket_lua, 1, key, capacity, refill_rate, now)
-    
+
+    allowed = await redis_client.eval(
+        TOKEN_BUCKET_LUA,
+        1,
+        key,
+        settings.rate_limit_capacity,
+        settings.rate_limit_refill_rate,
+        time.time(),
+    )
+
     if not allowed:
-        raise HTTPException(status_code=429, detail="Too Many Requests - Slow down!")
-    
+        raise HTTPException(
+            status_code=429,
+            detail="Too Many Requests — slow down.",
+        )
+
     return True

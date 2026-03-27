@@ -1,20 +1,35 @@
+"""
+SQLAlchemy domain models.
+
+Defines the core data model for users, uploads, chunks, download tokens,
+and share links. All tables use UUID primary keys and timezone-aware timestamps.
+"""
+
 import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import String, Integer, BigInteger, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import (
+    String, Integer, BigInteger, Boolean, DateTime,
+    ForeignKey, UniqueConstraint, func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
 
+
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     uploads: Mapped[List["Upload"]] = relationship("Upload", back_populates="user")
 
@@ -22,43 +37,67 @@ class User(Base):
 class Upload(Base):
     __tablename__ = "uploads"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     filename: Mapped[str] = mapped_column(String(255))
     total_size: Mapped[int] = mapped_column(BigInteger)
     chunk_size: Mapped[int] = mapped_column(Integer)
     total_chunks: Mapped[int] = mapped_column(Integer)
     file_checksum: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(100), default="uploading")
-    api_key: Mapped[Optional[str]] = mapped_column(String(100))
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[Optional["User"]] = relationship("User", back_populates="uploads")
-    chunks: Mapped[List["Chunk"]] = relationship("Chunk", back_populates="upload", cascade="all, delete-orphan")
+    chunks: Mapped[List["Chunk"]] = relationship(
+        "Chunk", back_populates="upload", cascade="all, delete-orphan"
+    )
 
 
 class Chunk(Base):
     __tablename__ = "chunks"
+    __table_args__ = (
+        UniqueConstraint("upload_id", "chunk_index", name="uq_chunk_upload_index"),
+    )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("uploads.id", ondelete="CASCADE"), index=True
+    )
     chunk_index: Mapped[int] = mapped_column(Integer)
     size: Mapped[int] = mapped_column(Integer)
     checksum: Mapped[str] = mapped_column(String(255))
     checksum_valid: Mapped[bool] = mapped_column(Boolean, default=False)
     is_uploaded: Mapped[bool] = mapped_column(Boolean, default=False)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
-    # Relationship back to upload
     upload: Mapped["Upload"] = relationship("Upload", back_populates="chunks")
 
 
 class DownloadToken(Base):
     __tablename__ = "download_tokens"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("uploads.id", ondelete="CASCADE"), index=True
+    )
     token: Mapped[str] = mapped_column(String(500), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -69,8 +108,12 @@ class DownloadToken(Base):
 class ShareLink(Base):
     __tablename__ = "share_links"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("uploads.id", ondelete="CASCADE"), index=True
+    )
     slug: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     max_downloads: Mapped[Optional[int]] = mapped_column(Integer)
     download_count: Mapped[int] = mapped_column(Integer, default=0)
