@@ -54,7 +54,7 @@ export default function App() {
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [dashboardShareUrl, setDashboardShareUrl] = useState<string | null>(null);
+  const [shareFilename, setShareFilename] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [searchQ, setSearchQ] = useState('');
 
@@ -144,6 +144,13 @@ export default function App() {
   const handleLogout = () => { setToken(null); setFiles([]); setUpload(null); };
 
   // Upload
+  const handleNewUploadClick = () => {
+    setUpload(null);
+    setFile(null);
+    setShareUrl(null);
+    document.getElementById('file-input')?.click();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) setFile(e.target.files[0]);
   };
@@ -220,16 +227,24 @@ export default function App() {
     } catch { alert('Download failed.'); }
   };
 
-  const handleShareFile = async (id: string) => {
+  const handleShareFile = async (f: FileRecord) => {
     try {
-      const { data } = await axios.post(`${API_BASE}/uploads/${id}/share`, { ttl_hours: 24 });
-      setDashboardShareUrl(`${window.location.origin}${data.share_url}`);
+      const { data } = await axios.post(`${API_BASE}/uploads/${f.upload_id}/share`, { ttl_hours: 24 });
+      setShareFilename(f.filename);
+      setShareUrl(`${window.location.origin}${data.share_url}`);
     } catch { alert('Failed to share.'); }
   };
 
   const handleDeleteFile = async (id: string) => {
     if (!confirm('Permanently delete this file?')) return;
-    try { await axios.delete(`${API_BASE}/uploads/${id}`); fetchFiles(); }
+    try {
+      await axios.delete(`${API_BASE}/uploads/${id}`);
+      if (upload?.id === id) {
+        setUpload(null);
+        setFile(null);
+      }
+      fetchFiles();
+    }
     catch { alert('Delete failed.'); }
   };
 
@@ -245,6 +260,7 @@ export default function App() {
     if (!upload?.id) return;
     try {
       const { data } = await axios.post(`${API_BASE}/uploads/${upload.id}/share`, { ttl_hours: 24 });
+      setShareFilename(upload.filename);
       setShareUrl(`${window.location.origin}${data.share_url}`);
     } catch { alert('Failed to create share link.'); }
   };
@@ -306,7 +322,7 @@ export default function App() {
       <div className="app-shell">
         {/* Sidebar */}
         <aside className="app-sidebar">
-          <button className="btn-new" onClick={() => document.getElementById('file-input')?.click()}>
+          <button className="btn-new" onClick={handleNewUploadClick}>
             <UploadIcon size={20} color="var(--blue)" />
             New Upload
           </button>
@@ -382,40 +398,12 @@ export default function App() {
                   </>
                 )}
               </div>
-              {shareUrl && (
-                <div className="share-popup" style={{ marginTop: '1rem' }}>
-                  <div className="share-popup-header">
-                    <span className="share-popup-title">Share link (24h)</span>
-                    <button className="icon-btn" onClick={() => setShareUrl(null)}><X size={14} /></button>
-                  </div>
-                  <div className="share-link-row">
-                    <input className="share-link-input" readOnly value={shareUrl} />
-                    <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(shareUrl!); }}><Copy size={14} /></button>
-                    <a className="btn-secondary" href={shareUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} /></a>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
-          {/* File grid */}
           <div className="main-toolbar">
             <h2 className="main-title">My Drive</h2>
           </div>
-
-          {dashboardShareUrl && (
-            <div className="share-popup" style={{ marginBottom: '1.25rem' }}>
-              <div className="share-popup-header">
-                <span className="share-popup-title">Share link (expires in 24h)</span>
-                <button className="icon-btn" onClick={() => setDashboardShareUrl(null)}><X size={14} /></button>
-              </div>
-              <div className="share-link-row">
-                <input className="share-link-input" readOnly value={dashboardShareUrl} />
-                <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(dashboardShareUrl!); alert('Copied!'); }}><Copy size={14} /></button>
-                <a className="btn-secondary" href={dashboardShareUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} /></a>
-              </div>
-            </div>
-          )}
 
           {filtered.length === 0 ? (
             <div className="empty-state">
@@ -439,7 +427,7 @@ export default function App() {
                     </div>
                     <div className="file-card-actions">
                       <button className="file-action-btn" onClick={() => handleDownloadFile(f.upload_id)} title="Download"><Download size={15} /></button>
-                      <button className="file-action-btn" onClick={() => handleShareFile(f.upload_id)} title="Share"><Share2 size={15} /></button>
+                      <button className="file-action-btn" onClick={() => handleShareFile(f)} title="Share"><Share2 size={15} /></button>
                       <button className="file-action-btn delete" onClick={() => handleDeleteFile(f.upload_id)} title="Delete"><Trash2 size={15} /></button>
                     </div>
                   </div>
@@ -449,6 +437,33 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {shareUrl && (
+        <div className="modal-overlay" onClick={() => setShareUrl(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Share "{shareFilename}"</h3>
+              <button className="icon-btn" onClick={() => setShareUrl(null)}><X size={20} /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: '0.85rem', color: 'var(--gray-700)', marginBottom: '1rem' }}>
+                Anyone with this link can view and download this file for the next 24 hours.
+              </p>
+              <div className="share-link-row">
+                <input className="share-link-input" readOnly value={shareUrl} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(shareUrl); alert('Link copied to clipboard'); }}>
+                <Copy size={16} /> Copy Link
+              </button>
+              <a className="btn-primary" href={shareUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} /> Open Link
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
