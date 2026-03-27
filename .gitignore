@@ -33,3 +33,4 @@ dist-ssr/
 # Ignore all markdown files except README
 *.md
 !README.md
+!README_LEGACY.md
