@@ -16,13 +16,13 @@ Resumable chunked uploads · Real-time progress · Secure sharing · Rate limiti
 
 ---
 
-## 📖 Overview
+## Overview
 
-myCloud is a self-hosted cloud storage platform that lets you upload, manage, download, and share files from any browser. It's designed with production-grade engineering principles — resumable uploads, real-time progress via Server-Sent Events, and per-user storage quotas — all running in Docker containers.
+myCloud is a self-hosted cloud storage platform that lets you upload, manage, download, and share files from any browser. It's designed with production-grade engineering principles: resumable uploads, real-time progress via Server-Sent Events, and per-user storage quotas, all running in Docker containers.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -73,22 +73,22 @@ myCloud is a self-hosted cloud storage platform that lets you upload, manage, do
 
 ---
 
-## ✨ Features
+## Features
 
 | Feature | Description |
 |:---|:---|
-| **Resumable Chunked Uploads** | Files are split into 5 MB chunks with SHA-256 integrity verification. If a transfer fails, it resumes from the last successful chunk — not from scratch. |
+| **Resumable Chunked Uploads** | Files are split into 5 MB chunks with SHA-256 integrity verification. If a transfer fails, it resumes from the last successful chunk, not from scratch. |
 | **Real-Time Progress** | Server-Sent Events (SSE) via Redis pub/sub stream upload progress to the browser instantly. |
 | **Pause / Resume / Cancel** | Full control over active uploads from the UI. |
 | **Secure File Sharing** | Generate time-limited share links with optional download caps. |
 | **Per-User Storage Quotas** | Configurable storage cap (default: 5 GB) enforced at upload initiation. |
 | **Rate Limiting** | Redis-backed token bucket algorithm (Lua script) prevents abuse. |
-| **Multi-Tenant** | Full user isolation — JWT authentication with bcrypt password hashing. |
+| **Multi-Tenant** | Full user isolation: JWT authentication with bcrypt password hashing. |
 | **Production-Grade Config** | All secrets loaded from environment variables via Pydantic Settings. App crashes on startup if secrets are missing. |
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |:---|:---|
@@ -102,7 +102,7 @@ myCloud is a self-hosted cloud storage platform that lets you upload, manage, do
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -157,7 +157,7 @@ Navigate to **[http://localhost:5173](http://localhost:5173)**, create an accoun
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 All configuration is done through environment variables in `backend/.env`:
 
@@ -174,7 +174,7 @@ All configuration is done through environment variables in `backend/.env`:
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 myCloud/
@@ -211,15 +211,15 @@ myCloud/
 
 ---
 
-## 🔒 Security
+## Security
 
-- **No hardcoded secrets** — all secrets are loaded from environment variables; the app refuses to start if they're missing
-- **CORS whitelist** — no wildcard origins
-- **Cryptographic slugs** — share links use `secrets.token_urlsafe()`, not `random.choice()`
-- **Input validation** — Pydantic schemas enforce filename sanitization, SHA-256 hex format, and bounded ranges
-- **Rate limiting** — Redis-backed token bucket on upload and auth endpoints
-- **Non-root Docker** — production container runs as unprivileged `appuser`
-- **DB-level constraints** — Unique constraint on `(upload_id, chunk_index)` prevents duplicate chunks
+- **No hardcoded secrets**: all secrets are loaded from environment variables; the app refuses to start if they're missing
+- **CORS whitelist**: no wildcard origins
+- **Cryptographic slugs**: share links use `secrets.token_urlsafe()`, not `random.choice()`
+- **Input validation**: Pydantic schemas enforce filename sanitization, SHA-256 hex format, and bounded ranges
+- **Rate limiting**: Redis-backed token bucket on upload and auth endpoints
+- **Non-root Docker**: production container runs as unprivileged `appuser`
+- **DB-level constraints**: Unique constraint on `(upload_id, chunk_index)` prevents duplicate chunks
 
 ---
 
@@ -227,7 +227,7 @@ myCloud/
 
 The original project documentation can be found in the [Legacy README](README_LEGACY.md).
 
-## 📜 License
+## License
 
 This project is open source and available under the [MIT License](LICENSE).
 ```
